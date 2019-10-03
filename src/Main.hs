@@ -37,6 +37,10 @@ import qualified Data.Foldable as Foldable
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 
+-- Matrix
+import Data.Matrix (Matrix)
+import qualified Data.Matrix as Matrix
+
 -- bytestring
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as ByteString
@@ -209,6 +213,34 @@ isEAC :: ComponentData -> Bool
 isEAC =
   (==) EAC . componentType
 
+gkm :: Int -> Matrix Int
+gkm bmax =
+  Matrix.matrix bmax 1 $ \(i,j) -> 0
+
+gMatrix :: Int -> Matrix Int
+gMatrix nodes =
+  Matrix.matrix nodes nodes $ \(i,j) -> 0  
+
+iMatrix :: Int -> Matrix Int
+iMatrix nodes =
+  Matrix.matrix nodes 1 $ \(i,j) -> 0  
+
+iaMatrix :: Int -> Matrix Int
+iaMatrix unknownSources =
+  Matrix.matrix unknownSources 1 $ \(i,j) -> 0
+
+vMatrix :: Int -> Int -> Matrix Int
+vMatrix nodes npoints =
+  Matrix.matrix nodes npoints $ \(i,j) -> 0
+
+vaMatrix :: Int -> Matrix Int
+vaMatrix unknownSources =
+  Matrix.matrix unknownSources 1 $ \(i,j) -> 0
+
+vbMatrix :: Int -> Matrix Int
+vbMatrix voltageSources =
+  Matrix.matrix voltageSources 1 $ \(i,j) -> 0  
+
 catchShowIO :: IO a -> IO (Either String a)
 catchShowIO action =
   fmap Right action
@@ -246,6 +278,8 @@ main = do
           putStr "Number of Storage Components LC: "
           print (length lc)
 
+
+
   
 
 
@@ -260,3 +294,10 @@ main = do
   --       Right lc -> do
   --         putStr "Number of Storage Components LC: "
   --         print (length lc)
+
+
+
+
+
+
+

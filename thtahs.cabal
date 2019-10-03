@@ -22,4 +22,5 @@ executable thtahs
                        cassava,
                        vector,
                        bytestring,
-                       text
+                       text,
+                       matrix
