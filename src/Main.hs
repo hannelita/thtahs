@@ -88,7 +88,7 @@ data SimulationData =
   SimulationData { 
     nodes :: Int,
     voltageSources :: Int,
-    stepSize :: Int,
+    stepSize :: Float,
     tmax :: Float
      }
   deriving (Eq, Show)
@@ -213,13 +213,56 @@ isEAC :: ComponentData -> Bool
 isEAC =
   (==) EAC . componentType
 
-gkm :: Int -> Matrix Int
-gkm bmax =
-  Matrix.matrix bmax 1 $ \(i,j) -> 0
+condutance :: ComponentData -> Float -> Float
+condutance component dt =
+  case componentType component of
+    Resistor -> 1.0 / (magnitude component)
+    Capacitor -> (magnitude component) * 0.000001 * 2 / dt
+    Inductor -> dt / (2 * 0.001 * (magnitude component))
+    otherwise -> 0.0
 
-gMatrix :: Int -> Matrix Int
-gMatrix nodes =
-  Matrix.matrix nodes nodes $ \(i,j) -> 0  
+
+
+
+gkm :: Vector ComponentData -> Float -> Vector Float
+gkm components dt =
+  Vector.map (\c -> condutance c dt) components
+  -- Matrix.colVector (Vector.map (\c -> condutance c dt) components)
+  -- Matrix.fromList (length components) 1 (Vector.toList (Vector.map (\c -> condutance c dt) components))
+
+diagonalUpdate :: Int -> Matrix Float -> Float -> Matrix Float
+diagonalUpdate d buffer gkmHead =
+  let updated = (Matrix.getElem d d buffer) + gkmHead
+  in Matrix.setElem updated (d, d) buffer
+
+gMatrixUpdate :: [((Int, Int), Float)] -> Matrix Float -> Matrix Float
+gMatrixUpdate [] gmatrix = gmatrix
+gMatrixUpdate (((k, m), toUpdate):xs) gmatrix =
+  gMatrixUpdate xs (Matrix.setElem toUpdate (k, m) gmatrix)
+
+
+gMatrix :: (Int, Int) -> Matrix Float -> Float -> Matrix Float
+gMatrix (k, 0) buffer gkmHead = diagonalUpdate k buffer gkmHead
+gMatrix (0, m) buffer gkmHead = diagonalUpdate m buffer gkmHead
+gMatrix (k, m) buffer gkmHead = 
+  let updateK = ((k, k), (Matrix.getElem k k buffer) + gkmHead)
+      updateM = ((m, m), (Matrix.getElem m m buffer) + gkmHead)
+      updated1 = ((k, m), (Matrix.getElem k m buffer) - gkmHead)
+      updated2 = ((m, k), (Matrix.getElem m k buffer) - gkmHead)
+  in
+    gMatrixUpdate [updateK, updateM, updated1, updated2] buffer
+  -- Matrix.zero nodes nodes
+
+buildGMatrixFromVector :: SimulationData -> Vector ComponentData -> Matrix Float
+buildGMatrixFromVector simulation components =
+  buildGMatrixFromList simulation (Matrix.zero (nodes simulation) (nodes simulation)) (Vector.toList components)
+
+buildGMatrixFromList :: SimulationData -> Matrix Float -> [ComponentData] ->  Matrix Float
+buildGMatrixFromList _ buffer [] = buffer
+buildGMatrixFromList simulation buffer (c:cs) =
+  let gkm = condutance c $ stepSize simulation 
+      cmatrix = gMatrix (nodeK c, nodeM c) buffer gkm  
+      in buildGMatrixFromList simulation cmatrix cs
 
 iMatrix :: Int -> Matrix Int
 iMatrix nodes =
@@ -239,7 +282,15 @@ vaMatrix unknownSources =
 
 vbMatrix :: Int -> Matrix Int
 vbMatrix voltageSources =
-  Matrix.matrix voltageSources 1 $ \(i,j) -> 0  
+  Matrix.matrix voltageSources 1 $ \(i,j) -> 0
+
+tMatrix :: Int -> Matrix Int
+tMatrix npoints =
+  Matrix.matrix npoints 1 $ \(i,j) -> 0
+
+npoints :: SimulationData -> Int
+npoints sim = 
+  (round . stepSize $ sim) `div` (round . tmax $ sim) + 1
 
 catchShowIO :: IO a -> IO (Either String a)
 catchShowIO action =
@@ -277,6 +328,19 @@ main = do
           let lc = filterEnergyStorageComponent components
           putStr "Number of Storage Components LC: "
           print (length lc)
+          let dt = stepSize simulation
+          putStr "setpSize dt: "
+          print (dt)
+          let values = Vector.map (\c -> condutance c dt) components
+          putStr "Component Values: "
+          print (values)
+          
+          putStr "Gkm Values: \n"
+          print (gkm components dt)
+
+          let gmatr = buildGMatrixFromVector simulation components
+          putStr "G Matrix Values: \n"
+          print (gmatr)
 
 
 

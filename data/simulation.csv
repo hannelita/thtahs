@@ -1,2 +1,2 @@
 Number of Nodes,Number of Voltages Sources,Step Size,Maximum time for simulation
-2,1,100,50
+2,1,0.0001,0.000005

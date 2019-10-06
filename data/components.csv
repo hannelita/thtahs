@@ -1,5 +1,4 @@
 Element Type,Node K,Node M,Value,Source param 1,Source param 2,Plot
 EDC,2,0,10,0,0,0 
-R,2,1,4,0,0,0
-C,1,0,7,0,0,0
-L,1,0,6,0,0,0
+R,2,1,10,0,0,0
+L,1,0,1,0,0,0
