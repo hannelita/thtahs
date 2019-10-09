@@ -2,35 +2,6 @@
 {-# LANGUAGE RecordWildCards #-}
 
 module Main where
-  -- ( ComponentData(..)
-  -- , ComponentType(..)
-  -- , decodeItems
-  -- , decodeItemsFromFile
-  -- , filterCoomponents
-  -- )
-  -- where
-
--- import qualified Data.ByteString.Lazy as BL
--- import qualified Data.Vector as V
--- -- from cassava
--- import Data.Csv
-
-
--- data ComponentType = Resistor | Capacitor | Inductor | Source deriving (Eq, Show)
--- data Magnitude = Zero | Infinite | Float deriving (Eq, Show)
--- type Param = Float
-
--- type ComponentData = (BL.ByteString, Int, Int, Float, Param, Param, Int)
-
--- main :: IO ()
--- main = do
---   csvData <- BL.readFile "data/components.csv"
---   let v = decode NoHeader csvData :: Either String (V.Vector ComponentData)
---   let summed = fmap (V.foldr cp 0) v
---   putStrLn $ "Total was: " ++ (show summed)
---   where cp (component_type, node_k, node_m, magnitude, param_1, param_2, plot) n = n + 1
-
-
 import qualified Data.Foldable as Foldable
 
 -- vector
@@ -40,6 +11,9 @@ import qualified Data.Vector as Vector
 -- Matrix
 import Data.Matrix (Matrix)
 import qualified Data.Matrix as Matrix
+
+-- HMatrix
+import qualified Numeric.LinearAlgebra as HMatrix
 
 -- bytestring
 import Data.ByteString.Lazy (ByteString)
@@ -76,9 +50,9 @@ data ComponentData =
     componentType :: ComponentType,
     nodeK :: Int,
     nodeM :: Int,
-    magnitude :: Float,
-    param1 :: Float,
-    param2 :: Float,
+    magnitude :: Double,
+    param1 :: Double,
+    param2 :: Double,
     plot :: Int
      }
   deriving (Eq, Show)
@@ -88,15 +62,15 @@ data SimulationData =
   SimulationData { 
     nodes :: Int,
     voltageSources :: Int,
-    stepSize :: Float,
-    tmax :: Float
+    stepSize :: Double,
+    tmax :: Double
      }
   deriving (Eq, Show)
 
 data ComponentType = Resistor | Capacitor | Inductor | EAC | EDC | Other Text deriving (Eq, Show)
 -- data Source = EAC | EDC deriving (Eq, Show)
--- data Magnitude = Infinite | Float deriving (Eq, Show)
--- type Param = Float
+-- data Magnitude = Infinite | Double deriving (Eq, Show)
+-- type Param = Double
 
 -- type Component = (ComponentType, Magnitude)
 -- type Node = [Component]
@@ -192,9 +166,16 @@ isCapacitor =
 filterEnergyStorageComponent :: Vector ComponentData -> Vector ComponentData
 filterEnergyStorageComponent =
   Vector.filter (\r -> (componentType r == Capacitor) || (componentType r == Inductor))
+
+nh :: Vector ComponentData -> Int
+nh components =
+  length $ filterEnergyStorageComponent components
     
 -- filter ((== Zaal) . reviewLocation) reviews  
-  
+
+filterSources :: Vector ComponentData -> Vector ComponentData
+filterSources =
+  Vector.filter (\r -> (componentType r == EAC) || (componentType r == EAC))
 
 filterDCSource :: Vector ComponentData -> Vector ComponentData
 filterDCSource =
@@ -213,7 +194,7 @@ isEAC :: ComponentData -> Bool
 isEAC =
   (==) EAC . componentType
 
-condutance :: ComponentData -> Float -> Float
+condutance :: ComponentData -> Double -> Double
 condutance component dt =
   case componentType component of
     Resistor -> 1.0 / (magnitude component)
@@ -221,27 +202,24 @@ condutance component dt =
     Inductor -> dt / (2 * 0.001 * (magnitude component))
     otherwise -> 0.0
 
-
-
-
-gkm :: Vector ComponentData -> Float -> Vector Float
+gkm :: Vector ComponentData -> Double -> Vector Double
 gkm components dt =
   Vector.map (\c -> condutance c dt) components
   -- Matrix.colVector (Vector.map (\c -> condutance c dt) components)
   -- Matrix.fromList (length components) 1 (Vector.toList (Vector.map (\c -> condutance c dt) components))
 
-diagonalUpdate :: Int -> Matrix Float -> Float -> Matrix Float
+diagonalUpdate :: Int -> Matrix Double -> Double -> Matrix Double
 diagonalUpdate d buffer gkmHead =
   let updated = (Matrix.getElem d d buffer) + gkmHead
   in Matrix.setElem updated (d, d) buffer
 
-gMatrixUpdate :: [((Int, Int), Float)] -> Matrix Float -> Matrix Float
+gMatrixUpdate :: [((Int, Int), Double)] -> Matrix Double -> Matrix Double
 gMatrixUpdate [] gmatrix = gmatrix
 gMatrixUpdate (((k, m), toUpdate):xs) gmatrix =
   gMatrixUpdate xs (Matrix.setElem toUpdate (k, m) gmatrix)
 
 
-gMatrix :: (Int, Int) -> Matrix Float -> Float -> Matrix Float
+gMatrix :: (Int, Int) -> Matrix Double -> Double -> Matrix Double
 gMatrix (k, 0) buffer gkmHead = diagonalUpdate k buffer gkmHead
 gMatrix (0, m) buffer gkmHead = diagonalUpdate m buffer gkmHead
 gMatrix (k, m) buffer gkmHead = 
@@ -253,44 +231,95 @@ gMatrix (k, m) buffer gkmHead =
     gMatrixUpdate [updateK, updateM, updated1, updated2] buffer
   -- Matrix.zero nodes nodes
 
-buildGMatrixFromVector :: SimulationData -> Vector ComponentData -> Matrix Float
+buildGMatrixFromVector :: SimulationData -> Vector ComponentData -> Matrix Double
 buildGMatrixFromVector simulation components =
   buildGMatrixFromList simulation (Matrix.zero (nodes simulation) (nodes simulation)) (Vector.toList components)
 
-buildGMatrixFromList :: SimulationData -> Matrix Float -> [ComponentData] ->  Matrix Float
+buildGMatrixFromList :: SimulationData -> Matrix Double -> [ComponentData] ->  Matrix Double
 buildGMatrixFromList _ buffer [] = buffer
 buildGMatrixFromList simulation buffer (c:cs) =
   let gkm = condutance c $ stepSize simulation 
       cmatrix = gMatrix (nodeK c, nodeM c) buffer gkm  
       in buildGMatrixFromList simulation cmatrix cs
 
-iMatrix :: Int -> Matrix Int
-iMatrix nodes =
-  Matrix.matrix nodes 1 $ \(i,j) -> 0  
+ihMatrix :: Int -> Matrix Int
+ihMatrix nodes =
+  Matrix.matrix nodes 1 $ \(i,j) -> 0
 
-iaMatrix :: Int -> Matrix Int
-iaMatrix unknownSources =
-  Matrix.matrix unknownSources 1 $ \(i,j) -> 0
+buildIhVector :: [ComponentData] -> [Double] -> Int -> Vector Double -> Vector Double -> Matrix Double -> Vector Double
+buildIhVector [] _ _ _ ihnew _ = ihnew
+buildIhVector (component:cs) (gkml:gkms) n ihold ihnew vMatrix =
+  case (componentType component, nodeK component, nodeM component) of (Inductor, 0, m) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (2*gkml*(Matrix.getElem m n vMatrix) + ihold Vector.! 0))]) vMatrix
+                                                                      (Inductor, k, 0) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (-2*gkml*(Matrix.getElem k n vMatrix) + ihold Vector.! 0))]) vMatrix
+                                                                      (Inductor, k, m) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (-2*gkml*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) + ihold Vector.! 0))]) vMatrix
+                                                                      (Capacitor, 0, m) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (-2*gkml*(Matrix.getElem m n vMatrix) - ihold Vector.! 0))]) vMatrix
+                                                                      (Capacitor, k, 0) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (2*gkml*(Matrix.getElem k n vMatrix) - ihold Vector.! 0))]) vMatrix
+                                                                      (Capacitor, k, m) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (2*gkml*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) - ihold Vector.! 0))]) vMatrix
+                                                                      (_, _, _) -> buildIhVector cs gkms n ihold ihnew vMatrix
 
-vMatrix :: Int -> Int -> Matrix Int
-vMatrix nodes npoints =
-  Matrix.matrix nodes npoints $ \(i,j) -> 0
 
-vaMatrix :: Int -> Matrix Int
-vaMatrix unknownSources =
-  Matrix.matrix unknownSources 1 $ \(i,j) -> 0
 
-vbMatrix :: Int -> Matrix Int
-vbMatrix voltageSources =
-  Matrix.matrix voltageSources 1 $ \(i,j) -> 0
+buildVBVector :: [ComponentData] -> Vector Double
+buildVBVector components =
+  Vector.map (\s -> magnitude s) (filterSources (Vector.fromList components))
 
-tMatrix :: Int -> Matrix Int
-tMatrix npoints =
-  Matrix.matrix npoints 1 $ \(i,j) -> 0
+
+buildIVector :: [ComponentData] -> Vector Double -> Vector Double
+buildIVector [] buffer = buffer
+buildIVector (component:cs) iVec =
+  case (nodeK component, nodeM component) of (k, 0) -> buildIVector cs (iVec Vector.// [(k, ((magnitude component) + iVec Vector.! k))])
+                                             (0, m) -> buildIVector cs (iVec Vector.// [(m, ((magnitude component) - iVec Vector.! m))])
+                                             (k, m) -> buildIVector cs (iVec Vector.// [(k, ((magnitude component) + iVec Vector.! k)), (m, ((magnitude component) - iVec Vector.! m))])
+
+
+thtaControl :: Int -> Vector Double -> Vector Double -> (Int, Vector Double)
+thtaControl thtactl ihnew ih
+  | thtactl <= 0 = (thtactl, ihnew)
+  | thtactl < 3 = (thtactl + 1, (Vector.map (\i -> i/2) $ Vector.zipWith (+) ih ihnew))
+  | otherwise = (0, ihnew)
+
+toHMatrixTransformer :: Matrix Double -> HMatrix.Matrix Double
+toHMatrixTransformer matrix =
+  HMatrix.fromLists $ Matrix.toLists matrix
+
+toHMatrixVectorTransformer :: Vector Double -> HMatrix.Vector Double
+toHMatrixVectorTransformer vec =
+  HMatrix.fromList $ Vector.toList vec
+
+solver :: HMatrix.Vector Double -> HMatrix.Matrix Double -> HMatrix.Vector Double -> SimulationData -> (HMatrix.Vector Double, HMatrix.Matrix Double)
+solver iVector condutances vb simulation =
+  let ia = HMatrix.subVector 0 ((nodes simulation) - (voltageSources simulation)) iVector
+      [[gaa], [gab], [gba], [gbb]] = HMatrix.toBlocksEvery ((nodes simulation) - (voltageSources simulation)) ((nodes simulation) - (voltageSources simulation)) condutances
+      rhsa = ia - (gab HMatrix.#> vb)
+      va = gaa HMatrix.<\> rhsa
+      ib = (gba HMatrix.#> va) - (gbb HMatrix.#> vb)
+      iVec = HMatrix.vjoin [ia, ib]
+      vVec = va HMatrix.— vb
+  in
+    solver(iVec condutances )
+      
+
+thtaSimulationStep :: [ComponentData] -> [Double] -> SimulationData -> Int -> Int -> Double  -> Vector Double -> Vector Double -> Vector Double -> Matrix Double -> Vector Double -> Vector Double -> (Vector Double, Vector Double, Vector Double)
+thtaSimulationStep components gkms simulation thtactl n time ihold ihnew ih vMatrix vbVector iVector =
+  let ihBuffer = buildIhVector components gkms n ihold ihnew vMatrix
+      vbVector = buildVBVector components
+      iVector = buildIVector components iVector
+      (thta, ihThta) = (thtaControl thtactl ihBuffer ih)
+  in
+      (snd (thtaControl thtactl ihBuffer ih), snd (thtaControl thtactl ihBuffer ih), snd (thtaControl thtactl ihBuffer ih))
+
+
+-- thtaSimulation :: Vector Double -> [ComponentData] -> SimulationData -> Matrix Double -> Vector Double -> Double Vector
+-- thtaSimulation [] components simulation condutanceMtr voltageVec = voltageVec
+-- thtaSimulation (t:ts) condutanceMtr simulation voltageVec = 
+--   thtaSimulationStep components (Vector.toList gkm components (stepSize simulation)) simulation 1 1 t (ihMatrix . length .  nh components) (ihMatrix . length .  nh components) (Matrix.zero (nodes simulation) (npoints simulation)) (Vector.replicate (voltageSources simulation) 0)
+
+
+
 
 npoints :: SimulationData -> Int
 npoints sim = 
-  (round . stepSize $ sim) `div` (round . tmax $ sim) + 1
+  round ((stepSize sim)/(tmax sim)) + 1
 
 catchShowIO :: IO a -> IO (Either String a)
 catchShowIO action =
@@ -325,9 +354,9 @@ main = do
           let resistors = filterResistor components
           putStr "Number of resistors: "
           print (length resistors)
-          let lc = filterEnergyStorageComponent components
+          let lc = nh components
           putStr "Number of Storage Components LC: "
-          print (length lc)
+          print (lc)
           let dt = stepSize simulation
           putStr "setpSize dt: "
           print (dt)
@@ -335,33 +364,16 @@ main = do
           putStr "Component Values: "
           print (values)
           
+          let npts = npoints simulation
+          putStr "npoints: "
+          print (npts)
+
           putStr "Gkm Values: \n"
           print (gkm components dt)
 
           let gmatr = buildGMatrixFromVector simulation components
           putStr "G Matrix Values: \n"
           print (gmatr)
-
-
-
-  
-
-
-  --     eitherLC <-
-  --       fmap filterEnergyStorageComponent
-  --         <$> decodeItemsFromFile "data/components.csv"
-
-  --     case eitherLC of
-  --       Left reason ->
-  --         Exit.die reason
-
-  --       Right lc -> do
-  --         putStr "Number of Storage Components LC: "
-  --         print (length lc)
-
-
-
-
 
 
 

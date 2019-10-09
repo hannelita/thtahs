@@ -23,4 +23,5 @@ executable thtahs
                        vector,
                        bytestring,
                        text,
-                       matrix
+                       matrix,
+                       hmatrix
