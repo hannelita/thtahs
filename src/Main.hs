@@ -13,7 +13,8 @@ import Data.Matrix (Matrix)
 import qualified Data.Matrix as Matrix
 
 -- HMatrix
-import qualified Numeric.LinearAlgebra as HMatrix
+import qualified Numeric.LinearAlgebra.Data as HMatrix
+import qualified Numeric.LinearAlgebra.HMatrix as HMatrix
 
 -- bytestring
 import Data.ByteString.Lazy (ByteString)
@@ -175,7 +176,7 @@ nh components =
 
 filterSources :: Vector ComponentData -> Vector ComponentData
 filterSources =
-  Vector.filter (\r -> (componentType r == EAC) || (componentType r == EAC))
+  Vector.filter (\r -> (componentType r == EDC) || (componentType r == EAC))
 
 filterDCSource :: Vector ComponentData -> Vector ComponentData
 filterDCSource =
@@ -238,8 +239,8 @@ buildGMatrixFromVector simulation components =
 buildGMatrixFromList :: SimulationData -> Matrix Double -> [ComponentData] ->  Matrix Double
 buildGMatrixFromList _ buffer [] = buffer
 buildGMatrixFromList simulation buffer (c:cs) =
-  let gkm = condutance c $ stepSize simulation 
-      cmatrix = gMatrix (nodeK c, nodeM c) buffer gkm  
+  let gkmss = condutance c $ stepSize simulation 
+      cmatrix = gMatrix (nodeK c, nodeM c) buffer gkmss 
       in buildGMatrixFromList simulation cmatrix cs
 
 ihMatrix :: Int -> Matrix Int
@@ -264,12 +265,16 @@ buildVBVector components =
   Vector.map (\s -> magnitude s) (filterSources (Vector.fromList components))
 
 
-buildIVector :: [ComponentData] -> Vector Double -> Vector Double
-buildIVector [] buffer = buffer
-buildIVector (component:cs) iVec =
-  case (nodeK component, nodeM component) of (k, 0) -> buildIVector cs (iVec Vector.// [(k, ((magnitude component) + iVec Vector.! k))])
-                                             (0, m) -> buildIVector cs (iVec Vector.// [(m, ((magnitude component) - iVec Vector.! m))])
-                                             (k, m) -> buildIVector cs (iVec Vector.// [(k, ((magnitude component) + iVec Vector.! k)), (m, ((magnitude component) - iVec Vector.! m))])
+buildIVector :: [ComponentData] -> Vector Double -> Vector Double -> Vector Double
+buildIVector [] _ iVector = iVector
+buildIVector (component:cs) ih iVector =
+  case (componentType component, nodeK component, nodeM component) of (Inductor, k, 0) -> buildIVector cs ih (iVector Vector.// [(k, ((iVector Vector.! k) + ih Vector.! 0))])
+                                                                      (Inductor, 0, m) -> buildIVector cs ih (iVector Vector.// [(m, ((iVector Vector.! m) - ih Vector.! 0))])
+                                                                      (Inductor, k, m) -> buildIVector cs ih (iVector Vector.// [(m, ((iVector Vector.! m) + ih Vector.! 0)), (k, ((iVector Vector.! k) + ih Vector.! 0))])
+                                                                      (Capacitor, k, 0) -> buildIVector cs ih (iVector Vector.// [(k, ((iVector Vector.! k) + ih Vector.! 0))])
+                                                                      (Capacitor, 0, m) -> buildIVector cs ih (iVector Vector.// [(m, ((iVector Vector.! m) - ih Vector.! 0))])
+                                                                      (Capacitor, k, m) -> buildIVector cs ih (iVector Vector.// [(m, ((iVector Vector.! m) + ih Vector.! 0)), (k, ((iVector Vector.! k) + ih Vector.! 0))])
+                                                                      (_, _, _) -> buildIVector cs ih iVector
 
 
 thtaControl :: Int -> Vector Double -> Vector Double -> (Int, Vector Double)
@@ -278,48 +283,57 @@ thtaControl thtactl ihnew ih
   | thtactl < 3 = (thtactl + 1, (Vector.map (\i -> i/2) $ Vector.zipWith (+) ih ihnew))
   | otherwise = (0, ihnew)
 
+fromHMatrixTransformer :: HMatrix.Matrix Double -> Matrix Double
+fromHMatrixTransformer matrix =
+  Matrix.fromLists $ HMatrix.toLists matrix
+
 toHMatrixTransformer :: Matrix Double -> HMatrix.Matrix Double
 toHMatrixTransformer matrix =
   HMatrix.fromLists $ Matrix.toLists matrix
+
+fromHMatrixVectorTransformer :: HMatrix.Vector Double -> Vector Double
+fromHMatrixVectorTransformer vec =
+  Vector.fromList $ HMatrix.toList vec
 
 toHMatrixVectorTransformer :: Vector Double -> HMatrix.Vector Double
 toHMatrixVectorTransformer vec =
   HMatrix.fromList $ Vector.toList vec
 
-solver :: HMatrix.Vector Double -> HMatrix.Matrix Double -> HMatrix.Vector Double -> SimulationData -> (HMatrix.Vector Double, HMatrix.Matrix Double)
-solver iVector condutances vb simulation =
+solver :: HMatrix.Vector Double -> HMatrix.Matrix Double -> HMatrix.Matrix Double -> HMatrix.Matrix Double -> HMatrix.Matrix Double -> HMatrix.Vector Double -> SimulationData -> (Vector Double, Vector Double)
+solver iVector gaa gab gba gbb vb simulation =
   let ia = HMatrix.subVector 0 ((nodes simulation) - (voltageSources simulation)) iVector
-      [[gaa], [gab], [gba], [gbb]] = HMatrix.toBlocksEvery ((nodes simulation) - (voltageSources simulation)) ((nodes simulation) - (voltageSources simulation)) condutances
       rhsa = ia - (gab HMatrix.#> vb)
       va = gaa HMatrix.<\> rhsa
-      ib = (gba HMatrix.#> va) - (gbb HMatrix.#> vb)
-      iVec = HMatrix.vjoin [ia, ib]
-      vVec = va HMatrix.— vb
+      ib = (gba HMatrix.#> va) + (gbb HMatrix.#> vb)
+      iVec = HMatrix.vjoin [ia, ib]      
+      vVec = HMatrix.vjoin [va, vb]
   in
-    solver(iVec condutances )
+    ((fromHMatrixVectorTransformer iVec), (fromHMatrixVectorTransformer vVec))
       
 
-thtaSimulationStep :: [ComponentData] -> [Double] -> SimulationData -> Int -> Int -> Double  -> Vector Double -> Vector Double -> Vector Double -> Matrix Double -> Vector Double -> Vector Double -> (Vector Double, Vector Double, Vector Double)
-thtaSimulationStep components gkms simulation thtactl n time ihold ihnew ih vMatrix vbVector iVector =
-  let ihBuffer = buildIhVector components gkms n ihold ihnew vMatrix
-      vbVector = buildVBVector components
-      iVector = buildIVector components iVector
+thtaSimulationStep :: [ComponentData] -> [Double] -> SimulationData -> Int -> Int -> Double  -> Vector Double -> Vector Double -> Matrix Double -> Vector Double -> Vector Double -> (Vector Double, Matrix Double)
+thtaSimulationStep _ _ _ _ 0 _ _ _ vMatrix _ iVector = (iVector, vMatrix)
+thtaSimulationStep components gkms simulation thtactl n time ihnew ih vMatrix vbVector iVector =
+  let condutances = buildGMatrixFromList simulation (Matrix.zero (nodes simulation) (nodes simulation)) components
+      (gaa, gab, gba, gbb) = Matrix.splitBlocks ((nodes simulation) - (voltageSources simulation)) ((nodes simulation) - (voltageSources simulation)) condutances
+      ihBuffer = buildIhVector components gkms n ih ihnew vMatrix
+      vbVec = buildVBVector components
       (thta, ihThta) = (thtaControl thtactl ihBuffer ih)
+      iVec = buildIVector components ihThta iVector
+      (iVecCalc, vVec) = solver (toHMatrixVectorTransformer iVec) (toHMatrixTransformer gaa) (toHMatrixTransformer gab) (toHMatrixTransformer gba) (toHMatrixTransformer gbb) (toHMatrixVectorTransformer vbVec) simulation
+      vMatr = Matrix.mapCol (\r _ -> vVec Vector.! (r - 1)) n vMatrix
   in
-      (snd (thtaControl thtactl ihBuffer ih), snd (thtaControl thtactl ihBuffer ih), snd (thtaControl thtactl ihBuffer ih))
+      thtaSimulationStep components gkms simulation thta (n-1) 0 ihnew ihThta vMatr vbVec iVecCalc
 
 
--- thtaSimulation :: Vector Double -> [ComponentData] -> SimulationData -> Matrix Double -> Vector Double -> Double Vector
--- thtaSimulation [] components simulation condutanceMtr voltageVec = voltageVec
--- thtaSimulation (t:ts) condutanceMtr simulation voltageVec = 
---   thtaSimulationStep components (Vector.toList gkm components (stepSize simulation)) simulation 1 1 t (ihMatrix . length .  nh components) (ihMatrix . length .  nh components) (Matrix.zero (nodes simulation) (npoints simulation)) (Vector.replicate (voltageSources simulation) 0)
-
-
+thtaSimulation :: Vector ComponentData -> SimulationData -> (Vector Double, Matrix Double)
+thtaSimulation components simulation = 
+  thtaSimulationStep (Vector.toList components) (Vector.toList (gkm components (stepSize simulation))) simulation 1 (npoints simulation) 0 (Vector.replicate (nh components) 0) (Vector.replicate (nh components) 0) (Matrix.zero (nodes simulation) (npoints simulation)) (Vector.replicate (voltageSources simulation) 0) (Vector.replicate (nodes simulation) 0)
 
 
 npoints :: SimulationData -> Int
 npoints sim = 
-  round ((stepSize sim)/(tmax sim)) + 1
+  round ((tmax sim)/(stepSize sim)) + 1
 
 catchShowIO :: IO a -> IO (Either String a)
 catchShowIO action =
@@ -374,6 +388,10 @@ main = do
           let gmatr = buildGMatrixFromVector simulation components
           putStr "G Matrix Values: \n"
           print (gmatr)
+
+          let results = thtaSimulation components simulation
+          putStr "Simulation: \n"
+          print (results)
 
 
 
