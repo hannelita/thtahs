@@ -70,14 +70,6 @@ data SimulationData =
   deriving (Eq, Show)
 
 data ComponentType = Resistor | Capacitor | Inductor | EAC | EDC | Other Text deriving (Eq, Show)
--- data Source = EAC | EDC deriving (Eq, Show)
--- data Magnitude = Infinite | Double deriving (Eq, Show)
--- type Param = Double
-
--- type Component = (ComponentType, Magnitude)
--- type Node = [Component]
--- type Circuit = [Node]
-
 type SimulationResults = (Vector Double, Matrix Double)
 
 instance FromNamedRecord SimulationData where
@@ -142,31 +134,6 @@ getSingleSimulationLine :: Vector SimulationData -> SimulationData
 getSingleSimulationLine = 
     Vector.head 
 
-filterResistor :: Vector ComponentData -> Vector ComponentData
-filterResistor =
-  Vector.filter isResistor
-
-isResistor :: ComponentData -> Bool
-isResistor =
-  (==) Resistor . componentType
-
-filterInductor :: Vector ComponentData -> Vector ComponentData
-filterInductor =
-  Vector.filter isInductor
-
-isInductor :: ComponentData -> Bool
-isInductor =
-  (==) Inductor . componentType
-
-filterCapacitor :: Vector ComponentData -> Vector ComponentData
-filterCapacitor =
-  Vector.filter isCapacitor
-
-isCapacitor :: ComponentData -> Bool
-isCapacitor =
-  (==) Capacitor . componentType
-
-
 filterEnergyStorageComponent :: Vector ComponentData -> Vector ComponentData
 filterEnergyStorageComponent =
   Vector.filter (\r -> (componentType r == Capacitor) || (componentType r == Inductor))
@@ -180,23 +147,6 @@ nh components =
 filterSources :: Vector ComponentData -> Vector ComponentData
 filterSources =
   Vector.filter (\r -> (componentType r == EDC) || (componentType r == EAC))
-
-filterDCSource :: Vector ComponentData -> Vector ComponentData
-filterDCSource =
-  Vector.filter isEDC
-
-isEDC :: ComponentData -> Bool
-isEDC =
-  (==) EDC . componentType
-
-
-filterACSource :: Vector ComponentData -> Vector ComponentData
-filterACSource =
-  Vector.filter isEAC
-
-isEAC :: ComponentData -> Bool
-isEAC =
-  (==) EAC . componentType
 
 condutance :: ComponentData -> Double -> Double
 condutance component dt =
@@ -310,13 +260,13 @@ solver iVector gaa gab gba gbb vb simulation =
     ((fromHMatrixVectorTransformer iVec), (fromHMatrixVectorTransformer vVec))
       
 
-thtaSimulationStep :: [ComponentData] -> Matrix Double -> [Double] -> SimulationData -> Int -> Int -> Double  -> Vector Double -> Matrix Double -> Vector Double -> Vector Double -> (Vector Double, Matrix Double)
+thtaSimulationStep :: [ComponentData] -> Matrix Double -> [Double] -> SimulationData -> Int -> Int -> Double  -> Vector Double -> Matrix Double -> Vector Double -> Vector Double -> SimulationResults
 thtaSimulationStep _ _ _ _ _ 1 _ _ vMatrix _ iVector = (iVector, vMatrix)
 thtaSimulationStep components condutances gkms simulation thtactl n time ih vMatrix vbVector iVector =
   let (gaa, gab, gba, gbb) = Matrix.splitBlocks ((nodes simulation) - (voltageSources simulation)) ((nodes simulation) - (voltageSources simulation)) condutances
       ihBuffer = buildIhVector components gkms n ih (Vector.replicate (nh (Vector.fromList components)) 0) vMatrix
       vbVec = buildVBVector components
-      (thta, ihThta, time) = thtaControl thtactl time ihBuffer ih
+      (thta, ihThta, timeThta) = thtaControl thtactl time ihBuffer ih
       iVec = buildIVector components ihThta (Vector.replicate (nodes simulation) 0)
       -- (iVecCalc, vVec) = Trace.trace ("Solver = " ++ show (solver (toHMatrixVectorTransformer iVec) (toHMatrixTransformer gaa) (toHMatrixTransformer gab) (toHMatrixTransformer gba) (toHMatrixTransformer gbb) (toHMatrixVectorTransformer vbVec) simulation)) solver (toHMatrixVectorTransformer iVec) (toHMatrixTransformer gaa) (toHMatrixTransformer gab) (toHMatrixTransformer gba) (toHMatrixTransformer gbb) (toHMatrixVectorTransformer vbVec) simulation
       (iVecCalc, vVec) = solver (toHMatrixVectorTransformer iVec) (toHMatrixTransformer gaa) (toHMatrixTransformer gab) (toHMatrixTransformer gba) (toHMatrixTransformer gbb) (toHMatrixVectorTransformer vbVec) simulation
@@ -355,39 +305,10 @@ main = do
       Exit.die reason
 
     Right simulation -> do
-      putStr "D: "
-      print (nodes simulation - voltageSources simulation)
-
       components_list <- decodeItemsFromFile "data/components.csv"
       case components_list of
         Left reason -> Exit.die reason
         Right components -> do
-          putStr "Number of components: "
-          print (length components)
-          let resistors = filterResistor components
-          putStr "Number of resistors: "
-          print (length resistors)
-          let lc = nh components
-          putStr "Number of Storage Components LC: "
-          print (lc)
-          let dt = stepSize simulation
-          putStr "setpSize dt: "
-          print (dt)
-          let values = Vector.map (\c -> condutance c dt) components
-          putStr "Component Values: "
-          print (values)
-          
-          let npts = npoints simulation
-          putStr "npoints: "
-          print (npts)
-
-          putStr "Gkm Values: \n"
-          print (gkm components dt)
-
-          let gmatr = buildGMatrixFromVector simulation components
-          putStr "G Matrix Values: \n"
-          print (gmatr)
-
           let results = thtaSimulation components simulation
           putStr "Simulation: \n"
           print (results)
