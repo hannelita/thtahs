@@ -136,8 +136,8 @@ getSingleSimulationLine =
 
 
 nhComponents :: [ComponentData] -> [ComponentData]
-nhComponents components =
-  filter (\r -> (componentType r == Capacitor) || (componentType r == Inductor)) components
+nhComponents =
+  filter (\r -> (componentType r == Capacitor) || (componentType r == Inductor))
 
 filterEnergyStorageComponent :: Vector ComponentData -> Vector ComponentData
 filterEnergyStorageComponent =
@@ -201,16 +201,16 @@ buildGMatrixFromList simulation buffer (c:cs) =
       cmatrix = gMatrix (nodeK c, nodeM c) buffer gkmss 
   in buildGMatrixFromList simulation cmatrix cs
 
-buildIhVector :: [ComponentData] -> [Double] -> Int -> [Double] -> [Double] -> Matrix Double -> Vector Double
+buildIhVector :: [ComponentData] -> Double -> Int -> [Double] -> [Double] -> Matrix Double -> Vector Double
 buildIhVector [] _ _ _ ihnew _ = Vector.fromList ihnew
-buildIhVector (component:cs) (gkml:gkms) n (hold:ihold) ihnew vMatrix =
-  case (componentType component, nodeK component, nodeM component) of (Inductor, 0, m) -> buildIhVector cs gkms n ihold (ihnew ++ [(2*gkml*(Matrix.getElem m n vMatrix) + hold)]) vMatrix
-                                                                      (Inductor, k, 0) -> buildIhVector cs gkms n ihold (ihnew ++ [(-2*gkml*(Matrix.getElem k n vMatrix) + hold)]) vMatrix
-                                                                      (Inductor, k, m) -> buildIhVector cs gkms n ihold (ihnew ++ [(-2*gkml*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) + hold)]) vMatrix
-                                                                      (Capacitor, 0, m) -> buildIhVector cs gkms n ihold (ihnew ++ [(-2*gkml*(Matrix.getElem m n vMatrix) - hold)]) vMatrix
-                                                                      (Capacitor, k, 0) -> buildIhVector cs gkms n ihold (ihnew ++ [(2*gkml*(Matrix.getElem k n vMatrix) - hold)]) vMatrix
-                                                                      (Capacitor, k, m) -> buildIhVector cs gkms n ihold (ihnew ++ [(2*gkml*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) - hold)]) vMatrix
-                                                                      (_, _, _) -> buildIhVector cs gkms n ihold ihnew vMatrix
+buildIhVector (component:cs) dt n (hold:ihold) ihnew vMatrix =
+  case (componentType component, nodeK component, nodeM component) of (Inductor, 0, m) -> buildIhVector cs dt n ihold (ihnew ++ [(2*(condutance component dt)*(Matrix.getElem m n vMatrix) + hold)]) vMatrix
+                                                                      (Inductor, k, 0) -> buildIhVector cs dt n ihold (ihnew ++ [(-2*(condutance component dt)*(Matrix.getElem k n vMatrix) + hold)]) vMatrix
+                                                                      (Inductor, k, m) -> buildIhVector cs dt n ihold (ihnew ++ [(-2*(condutance component dt)*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) + hold)]) vMatrix
+                                                                      (Capacitor, 0, m) -> buildIhVector cs dt n ihold (ihnew ++ [(-2*(condutance component dt)*(Matrix.getElem m n vMatrix) - hold)]) vMatrix
+                                                                      (Capacitor, k, 0) -> buildIhVector cs dt n ihold (ihnew ++ [(2*(condutance component dt)*(Matrix.getElem k n vMatrix) - hold)]) vMatrix
+                                                                      (Capacitor, k, m) -> buildIhVector cs dt n ihold (ihnew ++ [(2*(condutance component dt)*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) - hold)]) vMatrix
+                                                                      (_, _, _) -> buildIhVector cs dt n ihold ihnew vMatrix
 
 
 
@@ -268,11 +268,11 @@ solver iVector gaa gab gba gbb vb simulation =
     ((fromHMatrixVectorTransformer iVec), (fromHMatrixVectorTransformer vVec))
       
 
-thtaSimulationStep :: [ComponentData] -> Matrix Double -> [Double] -> SimulationData -> Int -> Int -> Double  -> Vector Double -> Matrix Double -> Vector Double -> Vector Double -> SimulationResults
-thtaSimulationStep _ _ _ _ _ 1 _ _ vMatrix _ iVector = (iVector, vMatrix)
-thtaSimulationStep components condutances gkms simulation thtactl n time ih vMatrix vbVector iVector =
+thtaSimulationStep :: [ComponentData] -> Matrix Double -> SimulationData -> Int -> Int -> Double  -> Vector Double -> Matrix Double -> Vector Double -> Vector Double -> SimulationResults
+thtaSimulationStep _ _ _ _ 1 _ _ vMatrix _ iVector = (iVector, vMatrix)
+thtaSimulationStep components condutances simulation thtactl n time ih vMatrix vbVector iVector =
   let (gaa, gab, gba, gbb) = Matrix.splitBlocks ((nodes simulation) - (voltageSources simulation)) ((nodes simulation) - (voltageSources simulation)) condutances
-      ihBuffer = Trace.trace ("ih = \n" ++ show (buildIhVector (nhComponents components) gkms n (Vector.toList ih) [] vMatrix)) buildIhVector (nhComponents components) gkms n (Vector.toList ih) [] vMatrix
+      ihBuffer = Trace.trace ("ih = \n" ++ show (buildIhVector (nhComponents components) (stepSize simulation) n (Vector.toList ih) [] vMatrix)) buildIhVector (nhComponents components) (stepSize simulation) n (Vector.toList ih) [] vMatrix
       (thta, ihThta, timeThta) = thtaControl thtactl time ihBuffer ih simulation
       vbVec = buildVBVector components timeThta []
       iVec = buildIVector (nhComponents components) (Vector.toList ihThta) (Vector.replicate (nodes simulation) 0)
@@ -280,12 +280,12 @@ thtaSimulationStep components condutances gkms simulation thtactl n time ih vMat
       (iVecCalc, vVec) = solver (toHMatrixVectorTransformer iVec) (toHMatrixTransformer gaa) (toHMatrixTransformer gab) (toHMatrixTransformer gba) (toHMatrixTransformer gbb) (toHMatrixVectorTransformer vbVec) simulation
       vMatr = Matrix.mapCol (\r _ -> vVec Vector.! (r - 1)) (n-1) vMatrix
   in
-      thtaSimulationStep components condutances gkms simulation thta (n-1) timeThta ihThta vMatr vbVec iVecCalc
+      thtaSimulationStep components condutances simulation thta (n-1) timeThta ihThta vMatr vbVec iVecCalc
 
 
 thtaSimulation :: Vector ComponentData -> SimulationData -> SimulationResults
 thtaSimulation components simulation = 
-  thtaSimulationStep (Vector.toList components) (buildGMatrixFromVector simulation components) (Vector.toList (gkm components (stepSize simulation))) simulation 1 (npoints simulation) 0.0 (Vector.replicate (nh components) 0) (Matrix.zero (nodes simulation) (npoints simulation)) (Vector.replicate (voltageSources simulation) 0) (Vector.replicate (nodes simulation) 0)
+  thtaSimulationStep (Vector.toList components) (buildGMatrixFromVector simulation components) simulation 1 (npoints simulation) 0.0 (Vector.replicate (nh components) 0) (Matrix.zero (nodes simulation) (npoints simulation)) (Vector.replicate (voltageSources simulation) 0) (Vector.replicate (nodes simulation) 0)
 
 
 npoints :: SimulationData -> Int
