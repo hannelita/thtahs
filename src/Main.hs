@@ -134,6 +134,11 @@ getSingleSimulationLine :: Vector SimulationData -> SimulationData
 getSingleSimulationLine = 
     Vector.head 
 
+
+nhComponents :: [ComponentData] -> [ComponentData]
+nhComponents components =
+  filter (\r -> (componentType r == Capacitor) || (componentType r == Inductor)) components
+
 filterEnergyStorageComponent :: Vector ComponentData -> Vector ComponentData
 filterEnergyStorageComponent =
   Vector.filter (\r -> (componentType r == Capacitor) || (componentType r == Inductor))
@@ -196,15 +201,15 @@ buildGMatrixFromList simulation buffer (c:cs) =
       cmatrix = gMatrix (nodeK c, nodeM c) buffer gkmss 
   in buildGMatrixFromList simulation cmatrix cs
 
-buildIhVector :: [ComponentData] -> [Double] -> Int -> Vector Double -> Vector Double -> Matrix Double -> Vector Double
-buildIhVector [] _ _ _ ihnew _ = ihnew
-buildIhVector (component:cs) (gkml:gkms) n ihold ihnew vMatrix =
-  case (componentType component, nodeK component, nodeM component) of (Inductor, 0, m) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (2*gkml*(Matrix.getElem m n vMatrix) + ihold Vector.! 0))]) vMatrix
-                                                                      (Inductor, k, 0) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (-2*gkml*(Matrix.getElem k n vMatrix) + ihold Vector.! 0))]) vMatrix
-                                                                      (Inductor, k, m) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (-2*gkml*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) + ihold Vector.! 0))]) vMatrix
-                                                                      (Capacitor, 0, m) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (-2*gkml*(Matrix.getElem m n vMatrix) - ihold Vector.! 0))]) vMatrix
-                                                                      (Capacitor, k, 0) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (2*gkml*(Matrix.getElem k n vMatrix) - ihold Vector.! 0))]) vMatrix
-                                                                      (Capacitor, k, m) -> buildIhVector cs gkms n ihold (ihnew Vector.// [(0, (2*gkml*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) - ihold Vector.! 0))]) vMatrix
+buildIhVector :: [ComponentData] -> [Double] -> Int -> [Double] -> [Double] -> Matrix Double -> Vector Double
+buildIhVector [] _ _ _ ihnew _ = Vector.fromList ihnew
+buildIhVector (component:cs) (gkml:gkms) n (hold:ihold) ihnew vMatrix =
+  case (componentType component, nodeK component, nodeM component) of (Inductor, 0, m) -> buildIhVector cs gkms n ihold (ihnew ++ [(2*gkml*(Matrix.getElem m n vMatrix) + hold)]) vMatrix
+                                                                      (Inductor, k, 0) -> buildIhVector cs gkms n ihold (ihnew ++ [(-2*gkml*(Matrix.getElem k n vMatrix) + hold)]) vMatrix
+                                                                      (Inductor, k, m) -> buildIhVector cs gkms n ihold (ihnew ++ [(-2*gkml*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) + hold)]) vMatrix
+                                                                      (Capacitor, 0, m) -> buildIhVector cs gkms n ihold (ihnew ++ [(-2*gkml*(Matrix.getElem m n vMatrix) - hold)]) vMatrix
+                                                                      (Capacitor, k, 0) -> buildIhVector cs gkms n ihold (ihnew ++ [(2*gkml*(Matrix.getElem k n vMatrix) - hold)]) vMatrix
+                                                                      (Capacitor, k, m) -> buildIhVector cs gkms n ihold (ihnew ++ [(2*gkml*((Matrix.getElem k n vMatrix) - (Matrix.getElem m n vMatrix)) - hold)]) vMatrix
                                                                       (_, _, _) -> buildIhVector cs gkms n ihold ihnew vMatrix
 
 
@@ -217,15 +222,15 @@ buildVBVector (c:components) time buffer =
                             _   -> buildVBVector components time buffer
 
 
-buildIVector :: [ComponentData] -> Vector Double -> Vector Double -> Vector Double
+buildIVector :: [ComponentData] -> [Double] -> Vector Double -> Vector Double
 buildIVector [] _ iVector = iVector
-buildIVector (component:cs) ih iVector =
-  case (componentType component, nodeK component, nodeM component) of (Inductor, k, 0) -> buildIVector cs ih (iVector Vector.// [((k - 1), ((iVector Vector.! (k-1)) + ih Vector.! 0))])
-                                                                      (Inductor, 0, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) - ih Vector.! 0))])
-                                                                      (Inductor, k, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) + ih Vector.! 0)), ((k-1), ((iVector Vector.! (k-1)) + ih Vector.! 0))])
-                                                                      (Capacitor, k, 0) -> buildIVector cs ih (iVector Vector.// [((k - 1), ((iVector Vector.! (k-1)) + ih Vector.! 0))])
-                                                                      (Capacitor, 0, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) - ih Vector.! 0))])
-                                                                      (Capacitor, k, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) + ih Vector.! 0)), ((k-1), ((iVector Vector.! (k-1)) + ih Vector.! 0))])
+buildIVector (component:cs) (ihEl:ih) iVector =
+  case (componentType component, nodeK component, nodeM component) of (Inductor, k, 0) -> buildIVector cs ih (iVector Vector.// [((k - 1), ((iVector Vector.! (k-1)) + ihEl))])
+                                                                      (Inductor, 0, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) - ihEl))])
+                                                                      (Inductor, k, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) + ihEl)), ((k-1), ((iVector Vector.! (k-1)) + ihEl))])
+                                                                      (Capacitor, k, 0) -> buildIVector cs ih (iVector Vector.// [((k - 1), ((iVector Vector.! (k-1)) + ihEl))])
+                                                                      (Capacitor, 0, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) - ihEl))])
+                                                                      (Capacitor, k, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) + ihEl)), ((k-1), ((iVector Vector.! (k-1)) + ihEl))])
                                                                       (_, _, _) -> buildIVector cs ih iVector
 
 
@@ -267,10 +272,10 @@ thtaSimulationStep :: [ComponentData] -> Matrix Double -> [Double] -> Simulation
 thtaSimulationStep _ _ _ _ _ 1 _ _ vMatrix _ iVector = (iVector, vMatrix)
 thtaSimulationStep components condutances gkms simulation thtactl n time ih vMatrix vbVector iVector =
   let (gaa, gab, gba, gbb) = Matrix.splitBlocks ((nodes simulation) - (voltageSources simulation)) ((nodes simulation) - (voltageSources simulation)) condutances
-      ihBuffer = buildIhVector components gkms n ih (Vector.replicate (nh (Vector.fromList components)) 0) vMatrix
+      ihBuffer = Trace.trace ("ih = \n" ++ show (buildIhVector (nhComponents components) gkms n (Vector.toList ih) [] vMatrix)) buildIhVector (nhComponents components) gkms n (Vector.toList ih) [] vMatrix
       (thta, ihThta, timeThta) = thtaControl thtactl time ihBuffer ih simulation
       vbVec = buildVBVector components timeThta []
-      iVec = buildIVector components ihThta (Vector.replicate (nodes simulation) 0)
+      iVec = buildIVector (nhComponents components) (Vector.toList ihThta) (Vector.replicate (nodes simulation) 0)
       -- (iVecCalc, vVec) = Trace.trace ("Solver = \n" ++ show (solver (toHMatrixVectorTransformer iVec) (toHMatrixTransformer gaa) (toHMatrixTransformer gab) (toHMatrixTransformer gba) (toHMatrixTransformer gbb) (toHMatrixVectorTransformer vbVec) simulation)) solver (toHMatrixVectorTransformer iVec) (toHMatrixTransformer gaa) (toHMatrixTransformer gab) (toHMatrixTransformer gba) (toHMatrixTransformer gbb) (toHMatrixVectorTransformer vbVec) simulation
       (iVecCalc, vVec) = solver (toHMatrixVectorTransformer iVec) (toHMatrixTransformer gaa) (toHMatrixTransformer gab) (toHMatrixTransformer gba) (toHMatrixTransformer gbb) (toHMatrixVectorTransformer vbVec) simulation
       vMatr = Matrix.mapCol (\r _ -> vVec Vector.! (r - 1)) (n-1) vMatrix
