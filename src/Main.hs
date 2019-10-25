@@ -227,10 +227,10 @@ buildIVector [] _ iVector = iVector
 buildIVector (component:cs) (ihEl:ih) iVector =
   case (componentType component, nodeK component, nodeM component) of (Inductor, k, 0) -> buildIVector cs ih (iVector Vector.// [((k - 1), ((iVector Vector.! (k-1)) + ihEl))])
                                                                       (Inductor, 0, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) - ihEl))])
-                                                                      (Inductor, k, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) + ihEl)), ((k-1), ((iVector Vector.! (k-1)) + ihEl))])
+                                                                      (Inductor, k, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) - ihEl)), ((k-1), ((iVector Vector.! (k-1)) + ihEl))])
                                                                       (Capacitor, k, 0) -> buildIVector cs ih (iVector Vector.// [((k - 1), ((iVector Vector.! (k-1)) + ihEl))])
                                                                       (Capacitor, 0, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) - ihEl))])
-                                                                      (Capacitor, k, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) + ihEl)), ((k-1), ((iVector Vector.! (k-1)) + ihEl))])
+                                                                      (Capacitor, k, m) -> buildIVector cs ih (iVector Vector.// [((m - 1), ((iVector Vector.! (m-1)) - ihEl)), ((k-1), ((iVector Vector.! (k-1)) + ihEl))])
                                                                       (_, _, _) -> buildIVector cs ih iVector
 
 
@@ -272,7 +272,7 @@ thtaSimulationStep :: [ComponentData] -> Matrix Double -> SimulationData -> Int 
 thtaSimulationStep _ _ _ _ 1 _ _ vMatrix _ iVector = (iVector, vMatrix)
 thtaSimulationStep components condutances simulation thtactl n time ih vMatrix vbVector iVector =
   let (gaa, gab, gba, gbb) = Matrix.splitBlocks ((nodes simulation) - (voltageSources simulation)) ((nodes simulation) - (voltageSources simulation)) condutances
-      ihBuffer = Trace.trace ("ih = \n" ++ show (buildIhVector (nhComponents components) (stepSize simulation) n (Vector.toList ih) [] vMatrix)) buildIhVector (nhComponents components) (stepSize simulation) n (Vector.toList ih) [] vMatrix
+      ihBuffer = buildIhVector (nhComponents components) (stepSize simulation) n (Vector.toList ih) [] vMatrix
       (thta, ihThta, timeThta) = thtaControl thtactl time ihBuffer ih simulation
       vbVec = buildVBVector components timeThta []
       iVec = buildIVector (nhComponents components) (Vector.toList ihThta) (Vector.replicate (nodes simulation) 0)
