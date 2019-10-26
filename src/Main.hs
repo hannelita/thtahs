@@ -167,39 +167,19 @@ gkm components dt =
   -- Matrix.colVector (Vector.map (\c -> condutance c dt) components)
   -- Matrix.fromList (length components) 1 (Vector.toList (Vector.map (\c -> condutance c dt) components))
 
-diagonalUpdate :: Int -> Matrix Double -> Double -> Matrix Double
-diagonalUpdate d buffer gkmHead =
-  let updated = (Matrix.getElem d d buffer) + gkmHead
-  in Matrix.setElem updated (d, d) buffer
+buildCompactGMatrix :: Double -> [ComponentData] -> Matrix Double -> Matrix Double
+buildCompactGMatrix dt [] buffer = buffer
+buildCompactGMatrix dt (component:cs) buffer =
+  case (nodeK component, nodeM component) of (0, m) -> buildCompactGMatrix dt cs (Matrix.setElem (Matrix.getElem m m buffer + condutance component dt) (m, m) buffer)
+                                             (k, 0) -> buildCompactGMatrix dt cs (Matrix.setElem (Matrix.getElem k k buffer + condutance component dt) (k, k) buffer)
+                                             (k, m) -> buildCompactGMatrix dt cs (Matrix.setElem (Matrix.getElem k k buffer + condutance component dt) (k, k) (Matrix.setElem (Matrix.getElem m m buffer + condutance component dt) (m, m) (Matrix.setElem (Matrix.getElem k m buffer - condutance component dt) (k, m) (Matrix.setElem (Matrix.getElem m k buffer - condutance component dt) (m, k) buffer))))
+                                             (_, _) -> buildCompactGMatrix dt cs buffer
 
-gMatrixUpdate :: [((Int, Int), Double)] -> Matrix Double -> Matrix Double
-gMatrixUpdate [] gmatrix = gmatrix
-gMatrixUpdate (((k, m), toUpdate):xs) gmatrix =
-  gMatrixUpdate xs (Matrix.setElem toUpdate (k, m) gmatrix)
-
-
-gMatrix :: (Int, Int) -> Matrix Double -> Double -> Matrix Double
-gMatrix (k, 0) buffer gkmHead = diagonalUpdate k buffer gkmHead
-gMatrix (0, m) buffer gkmHead = diagonalUpdate m buffer gkmHead
-gMatrix (k, m) buffer gkmHead = 
-  let updateK = ((k, k), (Matrix.getElem k k buffer) + gkmHead)
-      updateM = ((m, m), (Matrix.getElem m m buffer) + gkmHead)
-      updated1 = ((k, m), (Matrix.getElem k m buffer) - gkmHead)
-      updated2 = ((m, k), (Matrix.getElem m k buffer) - gkmHead)
-  in
-    gMatrixUpdate [updateK, updateM, updated1, updated2] buffer
-  -- Matrix.zero nodes nodes
 
 buildGMatrixFromVector :: SimulationData -> Vector ComponentData -> Matrix Double
 buildGMatrixFromVector simulation components =
-  buildGMatrixFromList simulation (Matrix.zero (nodes simulation) (nodes simulation)) (Vector.toList components)
+  buildCompactGMatrix (stepSize simulation) (Vector.toList components) (Matrix.zero (nodes simulation) (nodes simulation))
 
-buildGMatrixFromList :: SimulationData -> Matrix Double -> [ComponentData] ->  Matrix Double
-buildGMatrixFromList _ buffer [] = buffer
-buildGMatrixFromList simulation buffer (c:cs) =
-  let gkmss = condutance c $ stepSize simulation 
-      cmatrix = gMatrix (nodeK c, nodeM c) buffer gkmss 
-  in buildGMatrixFromList simulation cmatrix cs
 
 buildIhVector :: [ComponentData] -> Double -> Int -> [Double] -> [Double] -> Matrix Double -> Vector Double
 buildIhVector [] _ _ _ ihnew _ = Vector.fromList ihnew
@@ -271,7 +251,7 @@ solver iVector gaa gab gba gbb vb simulation =
 thtaSimulationStep :: [ComponentData] -> Matrix Double -> SimulationData -> Int -> Int -> Double  -> Vector Double -> Matrix Double -> Vector Double -> Vector Double -> SimulationResults
 thtaSimulationStep _ _ _ _ 1 _ _ vMatrix _ iVector = (iVector, vMatrix)
 thtaSimulationStep components condutances simulation thtactl n time ih vMatrix vbVector iVector =
-  let (gaa, gab, gba, gbb) = Matrix.splitBlocks ((nodes simulation) - (voltageSources simulation)) ((nodes simulation) - (voltageSources simulation)) condutances
+  let (gaa, gab, gba, gbb) = Matrix.splitBlocks (nodes simulation - voltageSources simulation) (nodes simulation - voltageSources simulation) condutances
       ihBuffer = buildIhVector (nhComponents components) (stepSize simulation) n (Vector.toList ih) [] vMatrix
       (thta, ihThta, timeThta) = thtaControl thtactl time ihBuffer ih simulation
       vbVec = buildVBVector components timeThta []
@@ -317,6 +297,9 @@ main = do
       case components_list of
         Left reason -> Exit.die reason
         Right components -> do
+          let gmt = buildGMatrixFromVector simulation components
+          putStr "GMatrix: \n"
+          print (gmt)
           let results = thtaSimulation components simulation
           putStr "Simulation: \n"
           print (results)
